@@ -31,6 +31,20 @@ async function run() {
 
         const db = client.db('BiteLogDB');
         const usersCollection = db.collection('users');
+        const mealsCollection = db.collection('meals');
+
+
+        app.get('/users/:email', async (req, res) => {
+            const email = req.params.email;
+            const user = await usersCollection.findOne({ email });
+
+            if (!user) {
+                return res.status(404).send({ message: 'User not found' });
+            }
+
+            res.send(user);
+        });
+
 
 
         app.post('/users', async (req, res) => {
@@ -42,12 +56,43 @@ async function run() {
 
             const user = {
                 ...req.body,
+                badge: 'Bronze',
                 last_log_in: new Date().toISOString()
             };
 
             const result = await usersCollection.insertOne(user);
             res.send(result);
         });
+
+
+
+        // Meals section 
+
+        app.get('/meals', async (req, res) => {
+            const meals = await mealsCollection.find().toArray();
+            res.send(meals);
+        });
+
+        
+
+        app.post('/meals', async (req, res) => {
+            try {
+                const meal = req.body;
+
+                meal.rating = meal.rating || 0;
+                meal.likes = meal.likes || 0;
+                meal.reviews_count = meal.reviews_count || 0;
+                meal.postTime = meal.postTime || new Date().toISOString();
+
+                const result = await mealsCollection.insertOne(meal);
+                res.status(201).send({ message: 'Meal added successfully', insertedId: result.insertedId });
+            } catch (error) {
+                console.error('Error inserting meal:', error);
+                res.status(500).send({ error: 'Failed to add meal' });
+            }
+        });
+
+
 
 
 
