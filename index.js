@@ -34,17 +34,21 @@ async function run() {
         const mealsCollection = db.collection('meals');
 
 
-        app.get('/users/:email', async (req, res) => {
-            const email = req.params.email;
-            const user = await usersCollection.findOne({ email });
 
-            if (!user) {
-                return res.status(404).send({ message: 'User not found' });
-            }
 
-            res.send(user);
+
+        app.get('/users', async (req, res) => {
+            const search = req.query.search || '';
+            const query = {
+                role: 'user',
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } },
+                ],
+            };
+            const users = await usersCollection.find(query).toArray();
+            res.send(users);
         });
-
 
 
         app.post('/users', async (req, res) => {
