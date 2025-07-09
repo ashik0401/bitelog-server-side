@@ -73,7 +73,14 @@ async function run() {
             res.send(meals);
         });
 
-        
+
+        app.get('/meals/count/:email', async (req, res) => {
+            const email = req.params.email;
+            const count = await mealsCollection.countDocuments({ distributorEmail: email });
+            res.send({ count });
+        });
+
+
 
         app.post('/meals', async (req, res) => {
             try {
