@@ -27,6 +27,7 @@ async function run() {
     const usersCollection = db.collection('users')
     const mealsCollection = db.collection('meals')
     const mealRequestsCollection = db.collection('mealRequests')
+    const upcomingMealsCollection = db.collection('upcomingMeals')
     const reviewsCollection = db.collection('reviews')
     const membershipCollection = db.collection('membership')
     const paymentCollection = db.collection('payments')
@@ -43,8 +44,6 @@ async function run() {
     });
 
 
-
-
     app.get('/users', async (req, res) => {
         const search = req.query.search || ''
         const query = {
@@ -57,6 +56,7 @@ async function run() {
         const users = await usersCollection.find(query).toArray()
         res.send(users)
     })
+
 
     app.post('/users', async (req, res) => {
         const email = req.body.email
@@ -74,7 +74,6 @@ async function run() {
     })
 
 
-
     app.patch('/users/admin/:id', async (req, res) => {
         try {
             const { id } = req.params;
@@ -90,9 +89,6 @@ async function run() {
             res.status(500).json({ message: 'Server error' });
         }
     });
-
-
-
 
 
     app.get('/membership/packages', async (req, res) => {
@@ -141,8 +137,6 @@ async function run() {
     });
 
 
-
-
     app.get('/meals', async (req, res) => {
         try {
             const page = parseInt(req.query.page) || 1
@@ -180,9 +174,6 @@ async function run() {
     })
 
 
-
-
-
     app.get('/meals/:id', async (req, res) => {
         try {
             let mealId
@@ -206,49 +197,41 @@ async function run() {
     })
 
 
+    app.post('/meals/:id/request', async (req, res) => {
+        try {
+            const mealId = req.params.id;
+            const { email, username, photoURL } = req.body;
 
+            if (!email || !username) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
 
+            if (!ObjectId.isValid(mealId)) {
+                return res.status(400).json({ message: 'Invalid meal ID format' });
+            }
 
+            const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
+            if (!meal) {
+                return res.status(404).json({ message: 'Meal not found' });
+            }
 
+            const requestDoc = {
+                mealId,
+                mealTitle: meal.title,
+                userEmail: email,
+                userName: username,
+                photoURL: photoURL || '',
+                status: 'pending',
+                createdAt: new Date(),
+            };
 
-app.post('/meals/:id/request', async (req, res) => {
-  try {
-    const mealId = req.params.id;
-    const { email, username, photoURL } = req.body;
-
-    if (!email || !username) {
-      return res.status(400).json({ message: 'Missing required fields' });
-    }
-
-    if (!ObjectId.isValid(mealId)) {
-      return res.status(400).json({ message: 'Invalid meal ID format' });
-    }
-
-    const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
-    if (!meal) {
-      return res.status(404).json({ message: 'Meal not found' });
-    }
-
-    const requestDoc = {
-      mealId,
-      mealTitle: meal.title,
-      userEmail: email,
-      userName: username,
-      photoURL: photoURL || '',
-      status: 'pending',
-      createdAt: new Date(),
-    };
-
-    await mealRequestsCollection.insertOne(requestDoc);
-    res.status(201).json({ message: 'Meal request submitted successfully' });
-  } catch (error) {
-    console.error('Meal Request Error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-
-
+            await mealRequestsCollection.insertOne(requestDoc);
+            res.status(201).json({ message: 'Meal request submitted successfully' });
+        } catch (error) {
+            console.error('Meal Request Error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
 
 
     app.get('/meal-requests', async (req, res) => {
@@ -264,9 +247,6 @@ app.post('/meals/:id/request', async (req, res) => {
     });
 
 
-
-
-
     app.patch('/meal-requests/:id/serve', async (req, res) => {
         const result = await mealRequestsCollection.updateOne(
             { _id: new ObjectId(req.params.id) },
@@ -274,9 +254,6 @@ app.post('/meals/:id/request', async (req, res) => {
         );
         res.send(result);
     });
-
-
-
 
 
     app.put('/meals/:id', async (req, res) => {
@@ -301,7 +278,6 @@ app.post('/meals/:id/request', async (req, res) => {
     });
 
 
-
     app.delete('/meals/:id', async (req, res) => {
         try {
             const id = req.params.id;
@@ -317,10 +293,6 @@ app.post('/meals/:id/request', async (req, res) => {
             res.status(500).json({ error: 'Internal Server Error' });
         }
     });
-
-
-
-
 
 
     app.get('/meals/count/:email', async (req, res) => {
@@ -344,6 +316,51 @@ app.post('/meals/:id/request', async (req, res) => {
     })
 
 
+
+   
+
+    app.get('/upcoming-meals', async (req, res) => {
+        const meals = await upcomingMealsCollection.find().sort({ likes: -1 }).toArray();
+        res.send(meals);
+    });
+
+    app.post('/publish-meal/:id', async (req, res) => {
+        const mealId = req.params.id;
+        if (!ObjectId.isValid(mealId)) {
+            return res.status(400).json({ message: 'Invalid meal ID' });
+        }
+
+        const meal = await upcomingMealsCollection.findOne({ _id: new ObjectId(mealId) });
+        if (!meal) {
+            return res.status(404).json({ message: 'Meal not found' });
+        }
+
+        delete meal._id;
+        meal.postTime = new Date();
+        await mealsCollection.insertOne(meal);
+        await upcomingMealsCollection.deleteOne({ _id: new ObjectId(mealId) });
+
+        res.status(200).json({ message: 'Meal published successfully' });
+    });
+
+
+
+    app.post('/upcoming-meals', async (req, res) => {
+        try {
+            const meal = req.body
+            meal.createdAt = new Date()
+            const result = await upcomingMealsCollection.insertOne(meal)
+            res.status(201).json({ message: 'Upcoming meal added', id: result.insertedId })
+        } catch (error) {
+            console.error('Add upcoming meal error:', error)
+            res.status(500).json({ message: 'Internal server error' })
+        }
+    })
+
+
+
+
+
     app.get('/payments', async (req, res) => {
         try {
             const { email } = req.query;
@@ -360,7 +377,6 @@ app.post('/meals/:id/request', async (req, res) => {
             res.status(500).json({ message: 'Server error' });
         }
     });
-
 
 
     app.post('/payments', async (req, res) => {
@@ -404,7 +420,6 @@ app.post('/meals/:id/request', async (req, res) => {
             res.status(500).json({ message: 'Server error' });
         }
     });
-
 
 
     app.post('/create-payment-intent', async (req, res) => {
