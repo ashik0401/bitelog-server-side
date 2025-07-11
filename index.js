@@ -26,6 +26,7 @@ async function run() {
     const db = client.db('BiteLogDB')
     const usersCollection = db.collection('users')
     const mealsCollection = db.collection('meals')
+    const mealRequestsCollection = db.collection('mealRequests')
     const reviewsCollection = db.collection('reviews')
     const membershipCollection = db.collection('membership')
     const paymentCollection = db.collection('payments')
@@ -148,6 +149,8 @@ async function run() {
             const search = req.query.search || ''
             const category = req.query.category || ''
             const priceRange = req.query.priceRange || ''
+            const sortBy = req.query.sortBy || 'postTime'
+            const order = req.query.order === 'asc' ? 1 : -1
             const limit = 10
             const skip = (page - 1) * limit
             const query = {}
@@ -163,12 +166,22 @@ async function run() {
                 query.price = { $gte: min, $lte: max }
             }
 
-            const meals = await mealsCollection.find(query).skip(skip).limit(limit).toArray()
+            const meals = await mealsCollection
+                .find(query)
+                .sort({ [sortBy]: order })
+                .skip(skip)
+                .limit(limit)
+                .toArray()
+
             res.send(meals)
         } catch {
             res.status(500).send({ error: 'Server Error' })
         }
     })
+
+
+
+
 
     app.get('/meals/:id', async (req, res) => {
         try {
@@ -192,70 +205,76 @@ async function run() {
         }
     })
 
-    app.post('/meals/:id/like', async (req, res) => {
-        try {
-            const userEmail = req.body.email
-            if (!userEmail) {
-                return res.status(400).json({ message: 'User email required' })
-            }
-
-            const mealId = new ObjectId(req.params.id)
-            const meal = await mealsCollection.findOne({ _id: mealId })
-            if (!meal) return res.status(404).json({ message: 'Meal not found' })
-
-            const alreadyLiked = (meal.likedBy || []).includes(userEmail)
-
-            const update = alreadyLiked
-                ? { $pull: { likedBy: userEmail }, $inc: { likes: -1 } }
-                : { $addToSet: { likedBy: userEmail }, $inc: { likes: 1 } }
-
-            await mealsCollection.updateOne({ _id: mealId }, update)
-
-            let updatedMeal = await mealsCollection.findOne({ _id: mealId })
-
-            if (updatedMeal.likes < 0) {
-                await mealsCollection.updateOne({ _id: mealId }, { $set: { likes: 0 } })
-                updatedMeal = await mealsCollection.findOne({ _id: mealId })
-            }
-
-            return res.status(200).json({ likes: updatedMeal.likes })
-        } catch (error) {
-            console.error('Like error:', error)
-            return res.status(500).json({ message: 'Server error', error: error.message })
-        }
-    })
 
 
-    app.post('/meals/:id/reviews', async (req, res) => {
-        try {
-            const mealId = new ObjectId(req.params.id);
-            const { text, email, username, photoURL } = req.body;
 
-            if (!text || !email || !username) {
-                return res.status(400).json({ message: 'Missing required fields' });
-            }
 
-            const review = {
-                mealId,
-                text,
-                email,
-                username,
-                photoURL: photoURL || '',
-                createdAt: new Date()
-            };
 
-            const result = await reviewsCollection.insertOne(review);
 
-            await mealsCollection.updateOne(
-                { _id: mealId },
-                { $inc: { reviews_count: 1 } }
-            );
+app.post('/meals/:id/request', async (req, res) => {
+  try {
+    const mealId = req.params.id;
+    const { email, username, photoURL } = req.body;
 
-            res.status(201).json({ message: 'Review added', insertedId: result.insertedId });
-        } catch (error) {
-            res.status(500).json({ message: 'Server error', error: error.message });
-        }
+    if (!email || !username) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    if (!ObjectId.isValid(mealId)) {
+      return res.status(400).json({ message: 'Invalid meal ID format' });
+    }
+
+    const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
+    if (!meal) {
+      return res.status(404).json({ message: 'Meal not found' });
+    }
+
+    const requestDoc = {
+      mealId,
+      mealTitle: meal.title,
+      userEmail: email,
+      userName: username,
+      photoURL: photoURL || '',
+      status: 'pending',
+      createdAt: new Date(),
+    };
+
+    await mealRequestsCollection.insertOne(requestDoc);
+    res.status(201).json({ message: 'Meal request submitted successfully' });
+  } catch (error) {
+    console.error('Meal Request Error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+
+
+
+
+    app.get('/meal-requests', async (req, res) => {
+        const search = req.query.search || '';
+        const query = {
+            $or: [
+                { userName: { $regex: search, $options: 'i' } },
+                { userEmail: { $regex: search, $options: 'i' } }
+            ]
+        };
+        const result = await mealRequestsCollection.find(query).sort({ createdAt: -1 }).toArray();
+        res.send(result);
     });
+
+
+
+
+
+    app.patch('/meal-requests/:id/serve', async (req, res) => {
+        const result = await mealRequestsCollection.updateOne(
+            { _id: new ObjectId(req.params.id) },
+            { $set: { status: 'delivered' } }
+        );
+        res.send(result);
+    });
+
 
 
 
