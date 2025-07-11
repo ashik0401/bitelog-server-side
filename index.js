@@ -249,6 +249,25 @@ async function run() {
 
 
 
+    app.delete('/meals/:id', async (req, res) => {
+        try {
+            const id = req.params.id;
+            const result = await mealsCollection.deleteOne({ _id: new ObjectId(id) });
+
+            if (result.deletedCount === 0) {
+                return res.status(404).json({ message: 'Meal not found' });
+            }
+
+            res.status(200).json({ message: 'Meal deleted successfully' });
+        } catch (error) {
+            console.error('DELETE meal error:', error.message);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    });
+
+
+
+
 
 
     app.get('/meals/count/:email', async (req, res) => {
