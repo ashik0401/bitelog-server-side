@@ -226,6 +226,40 @@ async function run() {
     })
 
 
+    app.post('/meals/:id/reviews', async (req, res) => {
+        try {
+            const mealId = new ObjectId(req.params.id);
+            const { text, email, username, photoURL } = req.body;
+
+            if (!text || !email || !username) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
+
+            const review = {
+                mealId,
+                text,
+                email,
+                username,
+                photoURL: photoURL || '',
+                createdAt: new Date()
+            };
+
+            const result = await reviewsCollection.insertOne(review);
+
+            await mealsCollection.updateOne(
+                { _id: mealId },
+                { $inc: { reviews_count: 1 } }
+            );
+
+            res.status(201).json({ message: 'Review added', insertedId: result.insertedId });
+        } catch (error) {
+            res.status(500).json({ message: 'Server error', error: error.message });
+        }
+    });
+
+
+
+
     app.put('/meals/:id', async (req, res) => {
         try {
             const id = req.params.id;
@@ -358,7 +392,7 @@ async function run() {
         const amountInCents = req.body.amountInCents
         try {
             const paymentIntent = await stripe.paymentIntents.create({
-                amount: amountInCents, // Amount in cents
+                amount: amountInCents,
                 currency: 'usd',
                 payment_method_types: ['card'],
             });
