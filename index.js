@@ -74,6 +74,25 @@ async function run() {
 
 
 
+    app.patch('/users/admin/:id', async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            const result = await usersCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: { role: 'admin' } }
+            );
+
+            res.send(result);
+        } catch (error) {
+            console.error('Error making user admin:', error);
+            res.status(500).json({ message: 'Server error' });
+        }
+    });
+
+
+
+
 
     app.get('/membership/packages', async (req, res) => {
         try {
@@ -207,6 +226,29 @@ async function run() {
     })
 
 
+    app.put('/meals/:id', async (req, res) => {
+        try {
+            const id = req.params.id;
+            const updatedMeal = req.body;
+
+            const result = await mealsCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: updatedMeal }
+            );
+
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ message: 'Meal not found' });
+            }
+
+            res.json({ message: 'Meal updated successfully' });
+        } catch (error) {
+            console.error('PUT meal error:', error.message);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    });
+
+
+
 
 
     app.get('/meals/count/:email', async (req, res) => {
@@ -232,17 +274,21 @@ async function run() {
 
     app.get('/payments', async (req, res) => {
         try {
+            const { email } = req.query;
+
+            const query = email ? { email } : {};
             const payments = await db.collection('payments')
-                .find()
+                .find(query)
                 .sort({ paid_at: -1 })
                 .toArray();
 
             res.send(payments);
         } catch (error) {
-            console.error('Error fetching all payments:', error);
+            console.error('Error fetching payments:', error);
             res.status(500).json({ message: 'Server error' });
         }
     });
+
 
 
     app.post('/payments', async (req, res) => {
