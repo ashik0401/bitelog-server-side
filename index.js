@@ -6,6 +6,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 dotenv.config()
 const app = express()
 const port = process.env.PORT || 3000
+const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY)
 
 app.use(cors())
 app.use(express.json())
@@ -26,9 +27,22 @@ async function run() {
     const usersCollection = db.collection('users')
     const mealsCollection = db.collection('meals')
     const reviewsCollection = db.collection('reviews')
-    const mealRequestsCollection = db.collection('mealRequests')
     const membershipCollection = db.collection('membership')
-    const paymentsCollection = db.collection('payments')
+    const paymentCollection = db.collection('payments')
+
+
+
+    app.get('/users/:email', async (req, res) => {
+        const email = req.params.email;
+        const user = await usersCollection.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        res.send(user);
+    });
+
+
+
 
     app.get('/users', async (req, res) => {
         const search = req.query.search || ''
@@ -72,6 +86,39 @@ async function run() {
     })
 
 
+    app.get('/membership/packages/:id', async (req, res) => {
+        const { id } = req.params
+
+        try {
+            const packageData = await membershipCollection.findOne({ _id: new ObjectId(id) })
+
+            if (!packageData) {
+                return res.status(404).json({ message: 'Package not found' })
+            }
+
+            res.json(packageData)
+        } catch (error) {
+            console.error('Error fetching membership package by ID:', error)
+            res.status(500).json({ message: 'Internal server error' })
+        }
+    })
+
+
+    app.get('/user/membership/:email', async (req, res) => {
+        const email = req.params.email;
+        const lastPayment = await db.collection('payments')
+            .find({ email })
+            .sort({ paid_at: -1 })
+            .limit(1)
+            .toArray();
+
+        if (!lastPayment[0]) return res.send({ badge: null, membershipId: null });
+
+        res.send({
+            badge: lastPayment[0].membershipBadge,
+            membershipId: lastPayment[0].membershipId,
+        });
+    });
 
 
 
@@ -162,64 +209,6 @@ async function run() {
 
 
 
-
-    app.post('/meals/:id/request', authenticate, checkSubscription, async (req, res) => {
-        try {
-            let mealId, userId
-            try {
-                mealId = new ObjectId(req.params.id)
-                userId = new ObjectId(req.user._id)
-            } catch {
-                return res.status(400).json({ message: 'Invalid ID format' })
-            }
-
-            const existingRequest = await mealRequestsCollection.findOne({ mealId, userId })
-            if (existingRequest) return res.status(400).json({ message: 'Already requested' })
-
-            const mealRequest = {
-                mealId,
-                userId,
-                status: 'pending',
-                requestedAt: new Date(),
-            }
-
-            await mealRequestsCollection.insertOne(mealRequest)
-            res.json({ message: 'Meal request sent', status: 'pending' })
-        } catch (error) {
-            res.status(500).json({ message: 'Server error' })
-        }
-    })
-
-    app.post('/meals/:id/reviews', authenticate, async (req, res) => {
-        try {
-            let mealId, userId
-            try {
-                mealId = new ObjectId(req.params.id)
-                userId = new ObjectId(req.user._id)
-            } catch {
-                return res.status(400).json({ message: 'Invalid ID format' })
-            }
-            const { text } = req.body
-            if (!text || text.trim() === '') return res.status(400).json({ message: 'Review text required' })
-
-            const meal = await mealsCollection.findOne({ _id: mealId })
-            if (!meal) return res.status(404).json({ message: 'Meal not found' })
-
-            const review = {
-                mealId,
-                userId,
-                username: req.user.username,
-                text,
-                createdAt: new Date(),
-            }
-
-            const result = await reviewsCollection.insertOne(review)
-            res.json({ _id: result.insertedId, ...review })
-        } catch (error) {
-            res.status(500).json({ message: 'Server error' })
-        }
-    })
-
     app.get('/meals/count/:email', async (req, res) => {
         const email = req.params.email
         const count = await mealsCollection.countDocuments({ distributorEmail: email })
@@ -239,6 +228,82 @@ async function run() {
             res.status(500).send({ error: 'Failed to add meal' })
         }
     })
+
+
+    app.get('/payments', async (req, res) => {
+        try {
+            const payments = await db.collection('payments')
+                .find()
+                .sort({ paid_at: -1 })
+                .toArray();
+
+            res.send(payments);
+        } catch (error) {
+            console.error('Error fetching all payments:', error);
+            res.status(500).json({ message: 'Server error' });
+        }
+    });
+
+
+    app.post('/payments', async (req, res) => {
+        try {
+            const {
+                email,
+                amount,
+                transactionId,
+                paymentMethod,
+                membershipId,
+                membershipBadge
+            } = req.body;
+
+            if (!email || !transactionId || !membershipId) {
+                return res.status(400).json({ message: 'Missing required fields' });
+            }
+
+            const paymentData = {
+                email,
+                amount,
+                transactionId,
+                membershipId: new ObjectId(membershipId),
+                paymentMethod,
+                paid_at_string: new Date().toISOString(),
+                paid_at: new Date()
+            };
+
+            const insertResult = await paymentCollection.insertOne(paymentData);
+
+            await db.collection('users').updateOne(
+                { email },
+                { $set: { badge: membershipBadge || 'Bronze' } }
+            );
+
+            res.status(201).json({
+                message: 'Payment successful, user badge updated',
+                insertedId: insertResult.insertedId
+            });
+        } catch (error) {
+            console.error('Error saving payment:', error);
+            res.status(500).json({ message: 'Server error' });
+        }
+    });
+
+
+
+    app.post('/create-payment-intent', async (req, res) => {
+        const amountInCents = req.body.amountInCents
+        try {
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amountInCents, // Amount in cents
+                currency: 'usd',
+                payment_method_types: ['card'],
+            });
+
+            res.json({ clientSecret: paymentIntent.client_secret });
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+
 }
 
 run().catch(console.dir)
