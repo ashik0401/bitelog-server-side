@@ -197,6 +197,114 @@ async function run() {
     })
 
 
+    app.post('/meals/:id/reviews', async (req, res) => {
+    const mealId = req.params.id;
+    const { text, email, username, photoURL } = req.body;
+
+    if (!text || !email || !username) {
+        return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    try {
+        const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
+        if (!meal) {
+            return res.status(404).json({ message: 'Meal not found' });
+        }
+
+        const review = {
+            mealId: new ObjectId(mealId),
+            mealTitle: meal.title,
+            text,
+            email,
+            username,
+            photoURL,
+            createdAt: new Date(),
+        };
+
+        await reviewsCollection.insertOne(review);
+
+        // 🔥 Increment review count in meals collection
+        await mealsCollection.updateOne(
+            { _id: new ObjectId(mealId) },
+            { $inc: { reviews_count: 1 } }
+        );
+
+        res.status(201).json({ message: 'Review submitted' });
+    } catch (err) {
+        res.status(500).json({ message: 'Error posting review' });
+    }
+});
+
+
+
+    app.get('/meals/:id/reviews', async (req, res) => {
+        try {
+            const mealId = req.params.id;
+
+            if (!ObjectId.isValid(mealId)) {
+                return res.status(400).json({ message: 'Invalid meal ID' });
+            }
+
+            const reviews = await reviewsCollection
+                .find({ mealId: new ObjectId(mealId) })
+                .sort({ createdAt: -1 })
+                .toArray();
+
+            res.json(reviews);
+        } catch (err) {
+            res.status(500).json({ message: 'Error fetching reviews' });
+        }
+    });
+
+
+app.get('/reviews/user/:email', async (req, res) => {
+    const email = req.params.email;
+
+    try {
+        const reviews = await reviewsCollection
+            .find({ email })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.json(reviews);
+    } catch (err) {
+        res.status(500).json({ message: 'Failed to fetch reviews' });
+    }
+});
+
+
+app.delete('/reviews/:id', async (req, res) => {
+    const id = req.params.id;
+
+    try {
+        const result = await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ message: 'Failed to delete review' });
+    }
+});
+
+
+app.patch('/reviews/:id', async (req, res) => {
+    const id = req.params.id;
+    const { text } = req.body;
+
+    try {
+        const result = await reviewsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { text, updatedAt: new Date() } }
+        );
+
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ message: 'Failed to update review' });
+    }
+});
+
+
+
+
+
     app.post('/meals/:id/request', async (req, res) => {
         try {
             const mealId = req.params.id;
@@ -316,13 +424,57 @@ async function run() {
     })
 
 
+app.post('/meals/:id/like', async (req, res) => {
+    const mealId = req.params.id;
+    const { email } = req.body;
 
-   
+    if (!email) {
+        return res.status(400).json({ message: 'User email is required' });
+    }
+
+    try {
+        const mealObjectId = new ObjectId(mealId);
+
+        const like = await db.collection('likes').findOne({
+            mealId: mealObjectId,
+            email,
+        });
+
+        if (like) {
+            await db.collection('likes').deleteOne({ _id: like._id });
+            await db.collection('meals').updateOne(
+                { _id: mealObjectId },
+                { $inc: { likes: -1 } }
+            );
+            return res.status(200).json({ message: 'Like removed', liked: false });
+        } else {
+            await db.collection('likes').insertOne({
+                mealId: mealObjectId,
+                email,
+                likedAt: new Date(),
+            });
+            await db.collection('meals').updateOne(
+                { _id: mealObjectId },
+                { $inc: { likes: 1 } }
+            );
+            return res.status(201).json({ message: 'Meal liked', liked: true });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+
+
+
+
+
 
     app.get('/upcoming-meals', async (req, res) => {
         const meals = await upcomingMealsCollection.find().sort({ likes: -1 }).toArray();
         res.send(meals);
     });
+
 
     app.post('/publish-meal/:id', async (req, res) => {
         const mealId = req.params.id;
@@ -344,7 +496,6 @@ async function run() {
     });
 
 
-
     app.post('/upcoming-meals', async (req, res) => {
         try {
             const meal = req.body
@@ -356,9 +507,6 @@ async function run() {
             res.status(500).json({ message: 'Internal server error' })
         }
     })
-
-
-
 
 
     app.get('/payments', async (req, res) => {
