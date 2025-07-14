@@ -322,10 +322,6 @@ async function run() {
     });
 
 
-
-
-
-
     app.delete('/meal-requests/:id', async (req, res) => {
         const id = req.params.id;
         const email = req.query.email;
@@ -348,6 +344,19 @@ async function run() {
         } catch (error) {
             res.status(500).json({ error: 'Failed to delete request' });
         }
+    });
+
+
+    app.get('/meal-categories', async (req, res) => {
+        const cats = await mealsCollection.distinct('category');
+        res.send(cats);
+    });
+
+
+    app.get('/price-ranges', async (req, res) => {
+        const prices = await mealsCollection.distinct("price");
+        const sorted = prices.sort((a, b) => a - b);
+        res.send(sorted.map(p => ({ label: `$${p}`, value: `${p}-${p}` })));
     });
 
 
