@@ -35,16 +35,6 @@ async function run() {
 
 
 
-    await mealsCollection.createIndex({
-        title: "text",
-        description: "text",
-        category: "text",
-        ingredients: "text"
-    });
-
-
-
-
     app.get('/users/:email', async (req, res) => {
         const email = req.params.email;
         const user = await usersCollection.findOne({ email });
@@ -57,16 +47,24 @@ async function run() {
 
     app.get('/users', async (req, res) => {
         const search = req.query.search || ''
+        const page = parseInt(req.query.page) || 1
+        const limit = parseInt(req.query.limit) || 10
+        const skip = (page - 1) * limit
+
         const query = {
             role: 'user',
             $or: [
                 { name: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } },
-            ],
+                { email: { $regex: search, $options: 'i' } }
+            ]
         }
-        const users = await usersCollection.find(query).toArray()
-        res.send(users)
+
+        const totalCount = await usersCollection.countDocuments(query)
+        const users = await usersCollection.find(query).skip(skip).limit(limit).toArray()
+
+        res.send({ users, totalCount })
     })
+
 
 
     app.post('/users', async (req, res) => {
@@ -148,7 +146,6 @@ async function run() {
         });
     });
 
-
     app.get('/meals', async (req, res) => {
         try {
             const page = parseInt(req.query.page) || 1;
@@ -157,12 +154,15 @@ async function run() {
             const priceRange = req.query.priceRange || '';
             const sortBy = req.query.sortBy || 'postTime';
             const order = req.query.order === 'asc' ? 1 : -1;
+            const hasReviewsOnly = req.query.hasReviewsOnly === 'true';
             const limit = 10;
             const skip = (page - 1) * limit;
 
             let query = {};
+            if (hasReviewsOnly) {
+                query.reviews_count = { $gt: 0 };
+            }
 
-            // Full-text search using MongoDB text index
             if (search) {
                 query.$text = { $search: search };
             }
@@ -178,6 +178,8 @@ async function run() {
 
             const projection = search ? { score: { $meta: 'textScore' } } : {};
 
+            const totalCount = await mealsCollection.countDocuments(query);
+
             const meals = await mealsCollection
                 .find(query)
                 .project(projection)
@@ -186,12 +188,13 @@ async function run() {
                 .limit(limit)
                 .toArray();
 
-            res.send(meals);
+            res.send({ meals, totalCount });
         } catch (err) {
-            console.error('Error fetching meals:', err);
             res.status(500).send({ error: 'Server Error' });
         }
     });
+
+
 
 
 
@@ -279,18 +282,43 @@ async function run() {
 
 
     app.get('/reviews/user/:email', async (req, res) => {
-        const email = req.params.email;
-
         try {
+            const email = req.params.email;
+            const page = parseInt(req.query.page) || 1;
+            const limit = parseInt(req.query.limit) || 10;
+            const skip = (page - 1) * limit;
+
+            const query = { email };
+
+            const totalCount = await reviewsCollection.countDocuments(query);
             const reviews = await reviewsCollection
-                .find({ email })
+                .find(query)
                 .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
                 .toArray();
-            res.json(reviews);
-        } catch (err) {
+
+            res.json({ reviews, totalCount });
+        } catch {
             res.status(500).json({ message: 'Failed to fetch reviews' });
         }
     });
+
+
+    app.get('/meals-by-ids', async (req, res) => {
+        try {
+            const idsParam = req.query.ids;
+            if (!idsParam) return res.status(400).json({ message: 'No IDs provided' });
+
+            const ids = idsParam.split(',').map(id => new ObjectId(id));
+            const meals = await mealsCollection.find({ _id: { $in: ids } }).toArray();
+            res.send(meals);
+        } catch (error) {
+            console.error('Error fetching meals by IDs:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
 
 
     app.delete('/reviews/:id', async (req, res) => {
@@ -403,22 +431,32 @@ async function run() {
         try {
             const email = req.query.email;
             const search = req.query.search || '';
+            const page = parseInt(req.query.page) || 1;
+            const limit = parseInt(req.query.limit) || 10;
+            const skip = (page - 1) * limit;
 
             const query = email
                 ? { userEmail: email }
                 : {
                     $or: [
                         { userName: { $regex: search, $options: 'i' } },
-                        { userEmail: { $regex: search, $options: 'i' } }
-                    ]
+                        { userEmail: { $regex: search, $options: 'i' } },
+                    ],
                 };
+
+            const totalCount = await mealRequestsCollection.countDocuments(query);
 
             const result = await mealRequestsCollection
                 .find(query)
                 .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
                 .toArray();
 
-            res.send(result);
+            res.send({
+                requests: result,
+                totalCount,
+            });
         } catch (error) {
             console.error('Error fetching meal requests:', error);
             res.status(500).json({ error: 'Internal Server Error' });
@@ -612,13 +650,107 @@ async function run() {
 
 
 
+app.post('/meals/:id/rate', async (req, res) => {
+  const mealId = req.params.id;
+  const { rating, email } = req.body;
+
+  if (!rating || rating < 1 || rating > 5) {
+    return res.status(400).json({ message: 'Invalid rating value' });
+  }
+
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required' });
+  }
+
+  try {
+    const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
+
+    if (!meal) return res.status(404).json({ message: 'Meal not found' });
+
+    if (meal.ratedBy && meal.ratedBy.includes(email)) {
+      return res.status(400).json({ message: 'You have already rated this meal' });
+    }
+
+    const updatedRatings = { ...meal.ratings };
+    updatedRatings[rating] = (updatedRatings[rating] || 0) + 1;
+
+    const newReviewsCount = (meal.reviews_count || 0) + 1;
+
+    await mealsCollection.updateOne(
+      { _id: new ObjectId(mealId) },
+      {
+        $set: { ratings: updatedRatings, reviews_count: newReviewsCount },
+        $push: { ratedBy: email }
+      }
+    );
+
+    res.json({ message: 'Rating submitted successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+app.patch('/meals/:id/rate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rating, email } = req.body;
+
+    const meal = await mealsCollection.findOne({ _id: new ObjectId(id) });
+    if (!meal) return res.status(404).send({ message: "Meal not found" });
+
+    const userRatings = meal.userRatings || {};
+    const prevRating = userRatings[email];
+
+    const updateOps = { [`ratings.${rating}`]: 1 };
+    if (prevRating) {
+      updateOps[`ratings.${prevRating}`] = -1;
+    }
+
+    await mealsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $inc: updateOps,
+        $set: { [`userRatings.${email}`]: rating }
+      }
+    );
+
+    res.send({ message: "Rating updated successfully" });
+  } catch (err) {
+    console.error("Rating error:", err);
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
 
 
 
     app.get('/upcoming-meals', async (req, res) => {
-        const meals = await upcomingMealsCollection.find().sort({ createdAt: -1 }).toArray();
-        res.send(meals);
-    });
+        try {
+            const page = parseInt(req.query.page) || 1
+            const limit = parseInt(req.query.limit) || 10
+            const skip = (page - 1) * limit
+
+            const totalCount = await upcomingMealsCollection.estimatedDocumentCount()
+
+            const meals = await upcomingMealsCollection
+                .find()
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .toArray()
+
+            res.send({
+                meals,
+                totalCount
+            })
+        } catch (error) {
+            console.error('Fetch upcoming meals error:', error)
+            res.status(500).json({ message: 'Internal server error' })
+        }
+    })
+
 
 
 
@@ -657,20 +789,28 @@ async function run() {
 
     app.get('/payments', async (req, res) => {
         try {
-            const { email } = req.query;
+            const { email, page = 1, limit = 10 } = req.query;
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            const skip = (pageNum - 1) * limitNum;
 
             const query = email ? { email } : {};
+
+            const totalCount = await db.collection('payments').countDocuments(query);
             const payments = await db.collection('payments')
                 .find(query)
                 .sort({ paid_at: -1 })
+                .skip(skip)
+                .limit(limitNum)
                 .toArray();
 
-            res.send(payments);
+            res.send({ payments, totalCount });
         } catch (error) {
             console.error('Error fetching payments:', error);
             res.status(500).json({ message: 'Server error' });
         }
     });
+
 
 
     app.post('/payments', async (req, res) => {
