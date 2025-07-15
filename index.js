@@ -11,6 +11,13 @@ const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY)
 app.use(cors())
 app.use(express.json())
 
+var admin = require("firebase-admin");
+var serviceAccount = require("./firebase-admin-key.json");
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@am.ochad9p.mongodb.net/?retryWrites=true&w=majority&appName=AM`
 const client = new MongoClient(uri, {
     serverApi: {
@@ -19,6 +26,30 @@ const client = new MongoClient(uri, {
         deprecationErrors: true,
     },
 })
+
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).send({ message: 'unauthorized access' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    try {
+      const userInfo = await admin.auth().verifyIdToken(token);
+      req.tokenEmail = userInfo.email;
+      return next();
+    } catch (error) {
+      const decodedToken = await admin.auth().verifyIdToken(token, true);
+      req.tokenEmail = decodedToken.email;
+      return next();
+    }
+  } catch (error) {
+    return res.status(401).send({ message: 'invalid token' });
+  }
+};
 
 async function run() {
     await client.connect()
@@ -32,11 +63,50 @@ async function run() {
     const membershipCollection = db.collection('membership')
     const paymentCollection = db.collection('payments')
 
+    app.post('/users', async (req, res) => {
+        const { email, name, photoURL } = req.body;
+        
+        if (!email) {
+            return res.status(400).send({ message: 'Email is required' });
+        }
 
+        const userExists = await usersCollection.findOne({ email });
+        if (userExists) {
+            return res.status(200).send({ 
+                message: 'User already exists', 
+                inserted: false,
+                user: userExists
+            });
+        }
 
+        const user = {
+            email,
+            name: name || email.split('@')[0],
+            photoURL: photoURL || '',
+            role: 'user',
+            mealsAdded: 0,
+            badge: 'Bronze',
+            last_log_in: new Date().toISOString(),
+        };
 
-    app.get('/users/:email', async (req, res) => {
+        try {
+            const result = await usersCollection.insertOne(user);
+            user._id = result.insertedId;
+            res.status(201).send({ 
+                message: 'User created successfully', 
+                inserted: true,
+                user 
+            });
+        } catch (error) {
+            res.status(500).send({ error: 'Failed to create user' });
+        }
+    });
+
+    app.get('/users/:email', verifyFirebaseToken, async (req, res) => {
         const email = req.params.email;
+        if (req.tokenEmail !== email) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
         const user = await usersCollection.findOne({ email });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -44,8 +114,7 @@ async function run() {
         res.send(user);
     });
 
-
-    app.get('/users', async (req, res) => {
+    app.get('/users', verifyFirebaseToken, async (req, res) => {
         const search = req.query.search || ''
         const page = parseInt(req.query.page) || 1
         const limit = parseInt(req.query.limit) || 10
@@ -65,73 +134,46 @@ async function run() {
         res.send({ users, totalCount })
     })
 
-
-
-    app.post('/users', async (req, res) => {
-        const email = req.body.email
-        const userExists = await usersCollection.findOne({ email })
-        if (userExists) {
-            return res.status(200).send({ message: 'User already exists', inserted: false })
-        }
-        const user = {
-            ...req.body,
-            mealsAdded: 0,
-            badge: 'Bronze',
-            last_log_in: new Date().toISOString(),
-        }
-        const result = await usersCollection.insertOne(user)
-        res.send(result)
-    })
-
-
-    app.patch('/users/admin/:id', async (req, res) => {
+    app.patch('/users/admin/:id', verifyFirebaseToken, async (req, res) => {
         try {
             const { id } = req.params;
-
             const result = await usersCollection.updateOne(
                 { _id: new ObjectId(id) },
                 { $set: { role: 'admin' } }
             );
-
             res.send(result);
         } catch (error) {
-            console.error('Error making user admin:', error);
             res.status(500).json({ message: 'Server error' });
         }
     });
-
 
     app.get('/membership/packages', async (req, res) => {
         try {
             const packages = await membershipCollection.find().sort({ level: 1 }).toArray()
             res.json(packages)
         } catch (error) {
-            console.error('Error fetching membership packages:', error)
             res.status(500).json({ message: 'Internal server error' })
         }
     })
-
 
     app.get('/membership/packages/:id', async (req, res) => {
         const { id } = req.params
-
         try {
             const packageData = await membershipCollection.findOne({ _id: new ObjectId(id) })
-
             if (!packageData) {
                 return res.status(404).json({ message: 'Package not found' })
             }
-
             res.json(packageData)
         } catch (error) {
-            console.error('Error fetching membership package by ID:', error)
             res.status(500).json({ message: 'Internal server error' })
         }
     })
 
-
-    app.get('/user/membership/:email', async (req, res) => {
+    app.get('/user/membership/:email', verifyFirebaseToken, async (req, res) => {
         const email = req.params.email;
+        if (req.tokenEmail !== email) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
         const lastPayment = await db.collection('payments')
             .find({ email })
             .sort({ paid_at: -1 })
@@ -194,10 +236,6 @@ async function run() {
         }
     });
 
-
-
-
-
     app.get('/meals/:id', async (req, res) => {
         try {
             let mealId
@@ -215,15 +253,17 @@ async function run() {
 
             res.json({ meal, reviews, reviewCount })
         } catch (error) {
-            console.error('Error in GET /meals/:id:', error)
             res.status(500).json({ message: 'Server error', error: error.message })
         }
     })
 
-
-    app.post('/meals/:id/reviews', async (req, res) => {
+    app.post('/meals/:id/reviews', verifyFirebaseToken, async (req, res) => {
         const mealId = req.params.id;
         const { text, email, username, photoURL } = req.body;
+
+        if (req.tokenEmail !== email) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
 
         if (!text || !email || !username) {
             return res.status(400).json({ message: 'Missing required fields' });
@@ -247,7 +287,6 @@ async function run() {
 
             await reviewsCollection.insertOne(review);
 
-            // 🔥 Increment review count in meals collection
             await mealsCollection.updateOne(
                 { _id: new ObjectId(mealId) },
                 { $inc: { reviews_count: 1 } }
@@ -258,8 +297,6 @@ async function run() {
             res.status(500).json({ message: 'Error posting review' });
         }
     });
-
-
 
     app.get('/meals/:id/reviews', async (req, res) => {
         try {
@@ -280,10 +317,13 @@ async function run() {
         }
     });
 
-
-    app.get('/reviews/user/:email', async (req, res) => {
+    app.get('/reviews/user/:email', verifyFirebaseToken, async (req, res) => {
         try {
             const email = req.params.email;
+            if (req.tokenEmail !== email) {
+                return res.status(403).send({ message: 'forbidden access' });
+            }
+
             const page = parseInt(req.query.page) || 1;
             const limit = parseInt(req.query.limit) || 10;
             const skip = (page - 1) * limit;
@@ -304,27 +344,32 @@ async function run() {
         }
     });
 
-
-    app.get('/meals-by-ids', async (req, res) => {
+    app.get('/meals-by-ids', verifyFirebaseToken, async (req, res) => {
         try {
             const idsParam = req.query.ids;
             if (!idsParam) return res.status(400).json({ message: 'No IDs provided' });
 
             const ids = idsParam.split(',').map(id => new ObjectId(id));
             const meals = await mealsCollection.find({ _id: { $in: ids } }).toArray();
+
             res.send(meals);
         } catch (error) {
-            console.error('Error fetching meals by IDs:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });
 
-
-
-    app.delete('/reviews/:id', async (req, res) => {
+    app.delete('/reviews/:id', verifyFirebaseToken, async (req, res) => {
         const id = req.params.id;
-
         try {
+            const review = await reviewsCollection.findOne({ _id: new ObjectId(id) });
+            if (!review) {
+                return res.status(404).json({ message: 'Review not found' });
+            }
+
+            if (review.email !== req.tokenEmail) {
+                return res.status(403).json({ message: 'Forbidden: Not your review' });
+            }
+
             const result = await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
             res.json(result);
         } catch (err) {
@@ -332,12 +377,20 @@ async function run() {
         }
     });
 
-
-    app.patch('/reviews/:id', async (req, res) => {
+    app.patch('/reviews/:id', verifyFirebaseToken, async (req, res) => {
         const id = req.params.id;
         const { text } = req.body;
 
         try {
+            const review = await reviewsCollection.findOne({ _id: new ObjectId(id) });
+            if (!review) {
+                return res.status(404).json({ message: 'Review not found' });
+            }
+
+            if (review.email !== req.tokenEmail) {
+                return res.status(403).json({ message: 'Forbidden: Not your review' });
+            }
+
             const result = await reviewsCollection.updateOne(
                 { _id: new ObjectId(id) },
                 { $set: { text, updatedAt: new Date() } }
@@ -349,13 +402,16 @@ async function run() {
         }
     });
 
-
-    app.delete('/meal-requests/:id', async (req, res) => {
+    app.delete('/meal-requests/:id', verifyFirebaseToken, async (req, res) => {
         const id = req.params.id;
         const email = req.query.email;
 
         if (!email) {
             return res.status(400).json({ error: 'User email is required' });
+        }
+
+        if (req.tokenEmail !== email) {
+            return res.status(403).json({ error: 'Forbidden' });
         }
 
         try {
@@ -374,12 +430,10 @@ async function run() {
         }
     });
 
-
     app.get('/meal-categories', async (req, res) => {
         const cats = await mealsCollection.distinct('category');
         res.send(cats);
     });
-
 
     app.get('/price-ranges', async (req, res) => {
         const prices = await mealsCollection.distinct("price");
@@ -387,13 +441,14 @@ async function run() {
         res.send(sorted.map(p => ({ label: `$${p}`, value: `${p}-${p}` })));
     });
 
-
-
-
-    app.post('/meals/:id/request', async (req, res) => {
+    app.post('/meals/:id/request', verifyFirebaseToken, async (req, res) => {
         try {
             const mealId = req.params.id;
             const { email, username, photoURL } = req.body;
+
+            if (req.tokenEmail !== email) {
+                return res.status(403).send({ message: 'forbidden access' });
+            }
 
             if (!email || !username) {
                 return res.status(400).json({ message: 'Missing required fields' });
@@ -421,13 +476,11 @@ async function run() {
             await mealRequestsCollection.insertOne(requestDoc);
             res.status(201).json({ message: 'Meal request submitted successfully' });
         } catch (error) {
-            console.error('Meal Request Error:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });
 
-
-    app.get('/meal-requests', async (req, res) => {
+    app.get('/meal-requests', verifyFirebaseToken, async (req, res) => {
         try {
             const email = req.query.email;
             const search = req.query.search || '';
@@ -458,15 +511,11 @@ async function run() {
                 totalCount,
             });
         } catch (error) {
-            console.error('Error fetching meal requests:', error);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     });
 
-
-
-
-    app.patch('/meal-requests/:id/serve', async (req, res) => {
+    app.patch('/meal-requests/:id/serve', verifyFirebaseToken, async (req, res) => {
         const result = await mealRequestsCollection.updateOne(
             { _id: new ObjectId(req.params.id) },
             { $set: { status: 'delivered' } }
@@ -474,8 +523,7 @@ async function run() {
         res.send(result);
     });
 
-
-    app.put('/meals/:id', async (req, res) => {
+    app.put('/meals/:id', verifyFirebaseToken, async (req, res) => {
         try {
             const id = req.params.id;
             const updatedMeal = req.body;
@@ -491,13 +539,11 @@ async function run() {
 
             res.json({ message: 'Meal updated successfully' });
         } catch (error) {
-            console.error('PUT meal error:', error.message);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     });
 
-
-    app.delete('/meals/:id', async (req, res) => {
+    app.delete('/meals/:id', verifyFirebaseToken, async (req, res) => {
         try {
             const id = req.params.id;
 
@@ -512,7 +558,6 @@ async function run() {
                 return res.status(404).json({ message: 'Meal not found' });
             }
 
-            // 👇 Decrease admin's mealsAdded count
             if (meal.distributorEmail) {
                 await usersCollection.updateOne(
                     { email: meal.distributorEmail, role: 'admin' },
@@ -522,20 +567,20 @@ async function run() {
 
             res.status(200).json({ message: 'Meal deleted successfully' });
         } catch (error) {
-            console.error('DELETE meal error:', error.message);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     });
 
-
-
-    app.get('/meals/count/:email', async (req, res) => {
+    app.get('/meals/count/:email', verifyFirebaseToken, async (req, res) => {
         const email = req.params.email
+        if (req.tokenEmail !== email) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
         const count = await mealsCollection.countDocuments({ distributorEmail: email })
         res.send({ count })
     })
 
-    app.post('/meals', async (req, res) => {
+    app.post('/meals', verifyFirebaseToken, async (req, res) => {
         try {
             const meal = req.body
             meal.rating = meal.rating || 0
@@ -557,12 +602,13 @@ async function run() {
         }
     })
 
-
-
-
-    app.post('/meals/:id/like', async (req, res) => {
+    app.post('/meals/:id/like', verifyFirebaseToken, async (req, res) => {
         const mealId = req.params.id;
         const { email } = req.body;
+
+        if (req.tokenEmail !== email) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
 
         if (!email) {
             return res.status(400).json({ message: 'User email is required' });
@@ -600,10 +646,13 @@ async function run() {
         }
     });
 
-
-    app.patch('/like-upcoming-meal/:id', async (req, res) => {
+    app.patch('/like-upcoming-meal/:id', verifyFirebaseToken, async (req, res) => {
         const mealId = req.params.id;
         const userEmail = req.body.email;
+
+        if (req.tokenEmail !== userEmail) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
 
         if (!userEmail) {
             return res.status(400).send({ message: 'User email is required' });
@@ -648,83 +697,83 @@ async function run() {
         }
     });
 
+    app.post('/meals/:id/rate', verifyFirebaseToken, async (req, res) => {
+        const mealId = req.params.id;
+        const { rating, email } = req.body;
 
+        if (req.tokenEmail !== email) {
+            return res.status(403).send({ message: 'forbidden access' });
+        }
 
-app.post('/meals/:id/rate', async (req, res) => {
-  const mealId = req.params.id;
-  const { rating, email } = req.body;
+        if (!rating || rating < 1 || rating > 5) {
+            return res.status(400).json({ message: 'Invalid rating value' });
+        }
 
-  if (!rating || rating < 1 || rating > 5) {
-    return res.status(400).json({ message: 'Invalid rating value' });
-  }
+        if (!email) {
+            return res.status(400).json({ message: 'Email is required' });
+        }
 
-  if (!email) {
-    return res.status(400).json({ message: 'Email is required' });
-  }
+        try {
+            const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
 
-  try {
-    const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
+            if (!meal) return res.status(404).json({ message: 'Meal not found' });
 
-    if (!meal) return res.status(404).json({ message: 'Meal not found' });
+            if (meal.ratedBy && meal.ratedBy.includes(email)) {
+                return res.status(400).json({ message: 'You have already rated this meal' });
+            }
 
-    if (meal.ratedBy && meal.ratedBy.includes(email)) {
-      return res.status(400).json({ message: 'You have already rated this meal' });
-    }
+            const updatedRatings = { ...meal.ratings };
+            updatedRatings[rating] = (updatedRatings[rating] || 0) + 1;
 
-    const updatedRatings = { ...meal.ratings };
-    updatedRatings[rating] = (updatedRatings[rating] || 0) + 1;
+            const newReviewsCount = (meal.reviews_count || 0) + 1;
 
-    const newReviewsCount = (meal.reviews_count || 0) + 1;
+            await mealsCollection.updateOne(
+                { _id: new ObjectId(mealId) },
+                {
+                    $set: { ratings: updatedRatings, reviews_count: newReviewsCount },
+                    $push: { ratedBy: email }
+                }
+            );
 
-    await mealsCollection.updateOne(
-      { _id: new ObjectId(mealId) },
-      {
-        $set: { ratings: updatedRatings, reviews_count: newReviewsCount },
-        $push: { ratedBy: email }
-      }
-    );
+            res.json({ message: 'Rating submitted successfully' });
+        } catch (error) {
+            res.status(500).json({ message: 'Server error' });
+        }
+    });
 
-    res.json({ message: 'Rating submitted successfully' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+    app.patch('/meals/:id/rate', verifyFirebaseToken, async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { rating, email } = req.body;
 
+            if (req.tokenEmail !== email) {
+                return res.status(403).send({ message: 'forbidden access' });
+            }
 
-app.patch('/meals/:id/rate', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { rating, email } = req.body;
+            const meal = await mealsCollection.findOne({ _id: new ObjectId(id) });
+            if (!meal) return res.status(404).send({ message: "Meal not found" });
 
-    const meal = await mealsCollection.findOne({ _id: new ObjectId(id) });
-    if (!meal) return res.status(404).send({ message: "Meal not found" });
+            const userRatings = meal.userRatings || {};
+            const prevRating = userRatings[email];
 
-    const userRatings = meal.userRatings || {};
-    const prevRating = userRatings[email];
+            const updateOps = { [`ratings.${rating}`]: 1 };
+            if (prevRating) {
+                updateOps[`ratings.${prevRating}`] = -1;
+            }
 
-    const updateOps = { [`ratings.${rating}`]: 1 };
-    if (prevRating) {
-      updateOps[`ratings.${prevRating}`] = -1;
-    }
+            await mealsCollection.updateOne(
+                { _id: new ObjectId(id) },
+                {
+                    $inc: updateOps,
+                    $set: { [`userRatings.${email}`]: rating }
+                }
+            );
 
-    await mealsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $inc: updateOps,
-        $set: { [`userRatings.${email}`]: rating }
-      }
-    );
-
-    res.send({ message: "Rating updated successfully" });
-  } catch (err) {
-    console.error("Rating error:", err);
-    res.status(500).send({ message: "Server error" });
-  }
-});
-
-
-
+            res.send({ message: "Rating updated successfully" });
+        } catch (err) {
+            res.status(500).send({ message: "Server error" });
+        }
+    });
 
     app.get('/upcoming-meals', async (req, res) => {
         try {
@@ -746,15 +795,11 @@ app.patch('/meals/:id/rate', async (req, res) => {
                 totalCount
             })
         } catch (error) {
-            console.error('Fetch upcoming meals error:', error)
             res.status(500).json({ message: 'Internal server error' })
         }
     })
 
-
-
-
-    app.post('/publish-meal/:id', async (req, res) => {
+    app.post('/publish-meal/:id', verifyFirebaseToken, async (req, res) => {
         const mealId = req.params.id;
         if (!ObjectId.isValid(mealId)) {
             return res.status(400).json({ message: 'Invalid meal ID' });
@@ -773,26 +818,27 @@ app.patch('/meals/:id/rate', async (req, res) => {
         res.status(200).json({ message: 'Meal published successfully' });
     });
 
-
-    app.post('/upcoming-meals', async (req, res) => {
+    app.post('/upcoming-meals', verifyFirebaseToken, async (req, res) => {
         try {
             const meal = req.body
             meal.createdAt = new Date()
             const result = await upcomingMealsCollection.insertOne(meal)
             res.status(201).json({ message: 'Upcoming meal added', id: result.insertedId })
         } catch (error) {
-            console.error('Add upcoming meal error:', error)
             res.status(500).json({ message: 'Internal server error' })
         }
     })
 
-
-    app.get('/payments', async (req, res) => {
+    app.get('/payments', verifyFirebaseToken, async (req, res) => {
         try {
             const { email, page = 1, limit = 10 } = req.query;
             const pageNum = parseInt(page);
             const limitNum = parseInt(limit);
             const skip = (pageNum - 1) * limitNum;
+
+            if (email && req.tokenEmail !== email) {
+                return res.status(403).json({ message: 'Forbidden' });
+            }
 
             const query = email ? { email } : {};
 
@@ -806,14 +852,11 @@ app.patch('/meals/:id/rate', async (req, res) => {
 
             res.send({ payments, totalCount });
         } catch (error) {
-            console.error('Error fetching payments:', error);
             res.status(500).json({ message: 'Server error' });
         }
     });
 
-
-
-    app.post('/payments', async (req, res) => {
+    app.post('/payments', verifyFirebaseToken, async (req, res) => {
         try {
             const {
                 email,
@@ -823,6 +866,10 @@ app.patch('/meals/:id/rate', async (req, res) => {
                 membershipId,
                 membershipBadge
             } = req.body;
+
+            if (req.tokenEmail !== email) {
+                return res.status(403).send({ message: 'forbidden access' });
+            }
 
             if (!email || !transactionId || !membershipId) {
                 return res.status(400).json({ message: 'Missing required fields' });
@@ -850,13 +897,11 @@ app.patch('/meals/:id/rate', async (req, res) => {
                 insertedId: insertResult.insertedId
             });
         } catch (error) {
-            console.error('Error saving payment:', error);
             res.status(500).json({ message: 'Server error' });
         }
     });
 
-
-    app.post('/create-payment-intent', async (req, res) => {
+    app.post('/create-payment-intent', verifyFirebaseToken, async (req, res) => {
         const amountInCents = req.body.amountInCents
         try {
             const paymentIntent = await stripe.paymentIntents.create({
@@ -870,7 +915,6 @@ app.patch('/meals/:id/rate', async (req, res) => {
             res.status(500).json({ error: error.message });
         }
     });
-
 }
 
 run().catch(console.dir)
