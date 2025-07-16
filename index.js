@@ -515,15 +515,27 @@ async function run() {
             const pageNum = parseInt(page);
             const limitNum = parseInt(limit);
             const skip = (pageNum - 1) * limitNum;
-            if (email && req.tokenEmail !== email) return res.status(403).json({ message: 'Forbidden' });
+
+            if (email && req.tokenEmail !== email) {
+                return res.status(403).json({ message: 'Forbidden' });
+            }
+
             const query = email ? { email } : {};
             const totalCount = await db.collection('payments').countDocuments(query);
-            const payments = await db.collection('payments').find(query).sort({ paid_at: -1 }).skip(skip).limit(limitNum).toArray();
+            const payments = await db
+                .collection('payments')
+                .find(query)
+                .sort({ paid_at: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .toArray();
+
             res.send({ payments, totalCount });
-        } catch (error) {
+        } catch {
             res.status(500).json({ message: 'Server error' });
         }
     });
+
 
     app.post('/payments', verifyFirebaseToken, async (req, res) => {
         try {
