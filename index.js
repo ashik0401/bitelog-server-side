@@ -15,12 +15,12 @@ const admin = require('firebase-admin');
 const serviceKeyBase64 = process.env.FB_SERVICE_KEY_BASE64;
 
 try {
-  const serviceAccount = JSON.parse(Buffer.from(serviceKeyBase64, 'base64').toString('utf-8'));
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-  console.log('Firebase initialized successfully');
+    const serviceAccount = JSON.parse(Buffer.from(serviceKeyBase64, 'base64').toString('utf-8'));
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    console.log('Firebase initialized successfully');
 } catch (error) {
-  console.error('Firebase initialization error:', error);
-  process.exit(1);
+    console.error('Firebase initialization error:', error);
+    process.exit(1);
 }
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@am.ochad9p.mongodb.net/?retryWrites=true&w=majority&appName=AM`
@@ -33,28 +33,28 @@ const client = new MongoClient(uri, {
 })
 
 const verifyFirebaseToken = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).send({ message: 'unauthorized access' });
-  }
-  const token = authHeader.split(' ')[1];
-  try {
-    try {
-      const userInfo = await admin.auth().verifyIdToken(token);
-      req.tokenEmail = userInfo.email;
-      return next();
-    } catch (error) {
-      const decodedToken = await admin.auth().verifyIdToken(token, true);
-      req.tokenEmail = decodedToken.email;
-      return next();
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).send({ message: 'unauthorized access' });
     }
-  } catch (error) {
-    return res.status(401).send({ message: 'invalid token' });
-  }
+    const token = authHeader.split(' ')[1];
+    try {
+        try {
+            const userInfo = await admin.auth().verifyIdToken(token);
+            req.tokenEmail = userInfo.email;
+            return next();
+        } catch (error) {
+            const decodedToken = await admin.auth().verifyIdToken(token, true);
+            req.tokenEmail = decodedToken.email;
+            return next();
+        }
+    } catch (error) {
+        return res.status(401).send({ message: 'invalid token' });
+    }
 };
 
 async function run() {
-   
+
     const db = client.db('BiteLogDB')
     const usersCollection = db.collection('users')
     const mealsCollection = db.collection('meals')
@@ -88,15 +88,30 @@ async function run() {
     });
 
     app.get('/users', verifyFirebaseToken, async (req, res) => {
-        const search = req.query.search || ''
-        const page = parseInt(req.query.page) || 1
-        const limit = parseInt(req.query.limit) || 10
-        const skip = (page - 1) * limit
-        const query = { role: 'user', $or: [ { name: { $regex: search, $options: 'i' } }, { email: { $regex: search, $options: 'i' } } ] }
-        const totalCount = await usersCollection.countDocuments(query)
-        const users = await usersCollection.find(query).skip(skip).limit(limit).toArray()
-        res.send({ users, totalCount })
-    })
+        const search = req.query.search || '';
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const query = {
+            role: 'user',
+            $or: [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+            ],
+        };
+
+        const totalCount = await usersCollection.countDocuments(query);
+
+        const users = await usersCollection
+            .find(query)
+            .sort({ created_at: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+
+        res.send({ users, totalCount });
+    });
 
     app.patch('/users/admin/:id', verifyFirebaseToken, async (req, res) => {
         try {
@@ -310,7 +325,7 @@ async function run() {
             const page = parseInt(req.query.page) || 1;
             const limit = parseInt(req.query.limit) || 10;
             const skip = (page - 1) * limit;
-            const query = email ? { userEmail: email } : { $or: [ { userName: { $regex: search, $options: 'i' } }, { userEmail: { $regex: search, $options: 'i' } } ] };
+            const query = email ? { userEmail: email } : { $or: [{ userName: { $regex: search, $options: 'i' } }, { userEmail: { $regex: search, $options: 'i' } }] };
             const totalCount = await mealRequestsCollection.countDocuments(query);
             const result = await mealRequestsCollection.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray();
             res.send({ requests: result, totalCount });
