@@ -96,7 +96,7 @@ STRIPE_SECRET_KEY=your_stripe_secret_key
 1. **Clone the Repo:**
 
 ```bash
-git clone https://github.com/your-username/bitelog-hostel-management.git
+git clone 
 cd bitelog-hostel-management
 
 
