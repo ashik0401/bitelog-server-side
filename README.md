@@ -81,15 +81,15 @@ STRIPE_SECRET_KEY=your_stripe_secret_key
 ---
 
 📌 Commit Checklist
--✅ Client: 20+ notable commits
--✅ Server: 12+ notable commits
--✅ Fully responsive
--✅ Sweet alerts/toasts implemented
--✅ JWT and Axios interceptor
--✅ .env hidden from GitHub
--✅ TanStack Query for all GET requests
--✅ Pagination on dashboard tables
--✅ All key features implemented
+- ✅ Client: 20+ notable commits
+- ✅ Server: 12+ notable commits
+- ✅ Fully responsive
+- ✅ Sweet alerts/toasts implemented
+- ✅ JWT and Axios interceptor
+- ✅ .env hidden from GitHub
+- ✅ TanStack Query for all GET requests
+- ✅ Pagination on dashboard tables
+- ✅ All key features implemented
 
 ## ✅ Installation & Run Locally
 
