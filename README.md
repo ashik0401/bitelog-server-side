@@ -80,6 +80,17 @@ STRIPE_SECRET_KEY=your_stripe_secret_key
 
 ---
 
+📌 Commit Checklist
+✅ Client: 20+ notable commits
+✅ Server: 12+ notable commits
+✅ Fully responsive
+✅ Sweet alerts/toasts implemented
+✅ JWT and Axios interceptor
+✅ .env hidden from GitHub
+✅ TanStack Query for all GET requests
+✅ Pagination on dashboard tables
+✅ All key features implemented
+
 ## ✅ Installation & Run Locally
 
 1. **Clone the Repo:**
@@ -99,19 +110,10 @@ npm install
 npm run start
 
 
-📌 Commit Checklist
-✅ Client: 20+ notable commits
-✅ Server: 12+ notable commits
-✅ Fully responsive
-✅ Sweet alerts/toasts implemented
-✅ JWT and Axios interceptor
-✅ .env hidden from GitHub
-✅ TanStack Query for all GET requests
-✅ Pagination on dashboard tables
-✅ All key features implemented
+
 
 
 🤝 Contact
 Md. Ashik Mahmud
-📧 ashikmahmud8346@.com
-🔗 [LinkedIn](https://www.linkedin.com/in/ashik-mahmud21/) | [GitHub](https://github.com/ashik0401)
+📧 ashikmahmud0825@gmail.com
+
