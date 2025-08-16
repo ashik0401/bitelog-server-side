@@ -53,6 +53,9 @@ const verifyFirebaseToken = async (req, res, next) => {
     }
 };
 
+
+
+
 async function run() {
 
     const db = client.db('BiteLogDB')
@@ -63,6 +66,7 @@ async function run() {
     const reviewsCollection = db.collection('reviews')
     const membershipCollection = db.collection('membership')
     const paymentCollection = db.collection('payments')
+    const subscriberCollection = db.collection('subscriber')
 
     app.post('/users', async (req, res) => {
         const { email, name, photoURL } = req.body;
@@ -560,6 +564,89 @@ async function run() {
             res.status(500).json({ error: error.message });
         }
     });
+
+
+    app.post("/subscribers", async (req, res) => {
+        try {
+            const { email } = req.body;
+            if (!email) return res.status(400).json({ message: "Email is required" });
+
+            const existing = await subscriberCollection.findOne({ email });
+            if (existing) return res.status(400).json({ message: "Already subscribed" });
+
+            await subscriberCollection.insertOne({ email, subscribedAt: new Date() });
+
+            res.status(201).json({ message: "Subscribed successfully" });
+        } catch (error) {
+            console.error("Error in newsletter POST:", error);
+            res.status(500).json({ message: "Server error" });
+        }
+    });
+
+    
+    app.get("/subscribers", async (req, res) => {
+        try {
+            const subscribers = await subscriberCollection
+                .find()
+                .sort({ subscribedAt: -1 }) 
+                .toArray();
+
+            res.status(200).json(subscribers);
+        } catch (error) {
+            console.error("Error fetching subscribers:", error);
+            res.status(500).json({ message: "Server error" });
+        }
+    });
+
+
+    
+    app.post("/subscribers/toggle", async (req, res) => {
+        try {
+            const { email } = req.body;
+            if (!email) return res.status(400).json({ message: "Email is required" });
+
+            const existing = await subscriberCollection.findOne({ email });
+
+            if (existing) {
+                
+                await subscriberCollection.deleteOne({ email });
+                return res.status(200).json({ message: "Unsubscribed successfully", subscribed: false });
+            } else {
+                
+                await subscriberCollection.insertOne({ email, subscribedAt: new Date() });
+                return res.status(201).json({ message: "Subscribed successfully", subscribed: true });
+            }
+        } catch (error) {
+            console.error("Error in toggle subscribe:", error);
+            res.status(500).json({ message: "Server error" });
+        }
+    });
+
+
+    
+    app.delete("/subscribers", async (req, res) => {
+        try {
+            const email = req.query.email;
+            if (!email) return res.status(400).json({ message: "Email is required" });
+
+            const collection = client.db("BiteLogDB").collection("subscriber");
+            const result = await collection.deleteOne({ email });
+
+            if (result.deletedCount === 0) {
+                return res.status(404).json({ message: "Email not found" });
+            }
+
+            res.status(200).json({ message: "Unsubscribed successfully" });
+        } catch (error) {
+            console.error("Error in DELETE /subscribers:", error);
+            res.status(500).json({ message: "Server error" });
+        }
+    });
+
+
+
+
+
 }
 
 run().catch(console.dir)
