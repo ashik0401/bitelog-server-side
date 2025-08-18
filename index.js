@@ -9,7 +9,7 @@ const port = process.env.PORT || 5000
 const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY)
 
 app.use(cors())
-app.use(express.json())
+app.use(express.json());
 
 const admin = require('firebase-admin');
 const serviceKeyBase64 = process.env.FB_SERVICE_KEY_BASE64;
@@ -69,19 +69,57 @@ async function run() {
     const subscriberCollection = db.collection('subscriber')
 
     app.post('/users', async (req, res) => {
-        const { email, name, photoURL } = req.body;
+        console.log('Incoming user info:', req.body); // log to verify
+
+        const { email, name, photoURL, phone, address } = req.body;
         if (!email) return res.status(400).send({ message: 'Email is required' });
+
         const userExists = await usersCollection.findOne({ email });
-        if (userExists) return res.status(200).send({ message: 'User already exists', inserted: false, user: userExists });
-        const user = { email, name: name || email.split('@')[0], photoURL: photoURL || '', role: 'user', mealsAdded: 0, badge: 'Bronze', last_log_in: new Date().toISOString() };
+
+        if (userExists) {
+            // update missing fields if user already exists
+            const updatedUser = await usersCollection.findOneAndUpdate(
+                { email },
+                {
+                    $set: {
+                        phone: phone || userExists.phone || '',
+                        address: address || userExists.address || '',
+                        photoURL: photoURL || userExists.photoURL || ''
+                    }
+                },
+                { returnDocument: 'after' }
+            );
+            return res.status(200).send({
+                message: 'User already exists, updated info',
+                inserted: false,
+                user: updatedUser.value
+            });
+        }
+
+        const user = {
+            email,
+            name: name || email.split('@')[0],
+            photoURL: photoURL || '',
+            phone: phone || '',
+            address: address || '',
+            role: 'user',
+            mealsAdded: 0,
+            badge: 'Bronze',
+            last_log_in: new Date().toISOString()
+        };
+
         try {
             const result = await usersCollection.insertOne(user);
             user._id = result.insertedId;
             res.status(201).send({ message: 'User created successfully', inserted: true, user });
         } catch (error) {
+            console.error(error); // log any errors
             res.status(500).send({ error: 'Failed to create user' });
         }
     });
+
+
+
 
     app.get('/users/:email', verifyFirebaseToken, async (req, res) => {
         const email = req.params.email;
@@ -150,10 +188,19 @@ async function run() {
     app.get('/user/membership/:email', verifyFirebaseToken, async (req, res) => {
         const email = req.params.email;
         if (req.tokenEmail !== email) return res.status(403).send({ message: 'forbidden access' });
-        const lastPayment = await db.collection('payments').find({ email }).sort({ paid_at: -1 }).limit(1).toArray();
+
+        const lastPayment = await db.collection('payments')
+            .find({ email })
+            .sort({ paid_at: -1 })
+            .limit(1)
+            .toArray();
+
         if (!lastPayment[0]) return res.send({ badge: null, membershipId: null });
-        res.send({ badge: lastPayment[0].membershipBadge, membershipId: lastPayment[0].membershipId });
+
+        const membershipData = await membershipCollection.findOne({ _id: lastPayment[0].membershipId });
+        res.send({ badge: membershipData?.badge || null, membershipId: lastPayment[0].membershipId });
     });
+
 
     app.get('/meals', async (req, res) => {
         try {
@@ -583,12 +630,12 @@ async function run() {
         }
     });
 
-    
+
     app.get("/subscribers", async (req, res) => {
         try {
             const subscribers = await subscriberCollection
                 .find()
-                .sort({ subscribedAt: -1 }) 
+                .sort({ subscribedAt: -1 })
                 .toArray();
 
             res.status(200).json(subscribers);
@@ -599,7 +646,7 @@ async function run() {
     });
 
 
-    
+
     app.post("/subscribers/toggle", async (req, res) => {
         try {
             const { email } = req.body;
@@ -608,11 +655,11 @@ async function run() {
             const existing = await subscriberCollection.findOne({ email });
 
             if (existing) {
-                
+
                 await subscriberCollection.deleteOne({ email });
                 return res.status(200).json({ message: "Unsubscribed successfully", subscribed: false });
             } else {
-                
+
                 await subscriberCollection.insertOne({ email, subscribedAt: new Date() });
                 return res.status(201).json({ message: "Subscribed successfully", subscribed: true });
             }
@@ -623,7 +670,7 @@ async function run() {
     });
 
 
-    
+
     app.delete("/subscribers", async (req, res) => {
         try {
             const email = req.query.email;
